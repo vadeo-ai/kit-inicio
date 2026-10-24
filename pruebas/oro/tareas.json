@@ -1,0 +1,5 @@
+[
+  { "caso": "crear con título vacío se rechaza", "entrada": { "titulo": "  " }, "esperado": { "status": 400 } },
+  { "caso": "crear sin estado queda pendiente", "entrada": { "titulo": "Revisar cifras" }, "esperado": { "status": 201, "estado": "pendiente" } },
+  { "caso": "estado fuera de la lista se rechaza", "entrada": { "titulo": "X", "estado": "cerrada" }, "esperado": { "status": 400 } }
+]

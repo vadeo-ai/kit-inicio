@@ -1,0 +1,20 @@
+name: ci
+on: [push, pull_request]
+permissions: { contents: read }
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: SQL compatible con Aurora DSQL
+        run: npm run lint:sql
+      - name: Fichas de función (funcion.yaml)
+        run: npm run lint:funciones
+      - name: Bitácora sin datos personales
+        run: npm run lint:bitacora
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

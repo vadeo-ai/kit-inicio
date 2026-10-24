@@ -1,0 +1,14 @@
+# Ficha de la función. Una carpeta en api/funciones/ = una función = su Lambda.
+nombre: tareas                  # igual al nombre de la carpeta, minúsculas-con-guiones
+frase: Registrar tareas y marcar cuándo quedan hechas.   # qué hace, en una frase de negocio
+dueno_rol: coordinador de operaciones   # rol responsable (nunca nombre ni correo)
+clase: negocio                  # negocio | interfaz | plataforma
+nivel_propuesto: N1             # N0 | N1 | N2 | N3 (propuesta; lo confirma Vadeo)
+datos:                          # tablas que lee o escribe
+  - tareas
+depende_de: []                  # otras funciones o servicios que llama
+reutilizable: "no"              # no | propuesta | aprobada
+version: 0.1.0
+# Opcionales: contrato (ej. shared/esquemas/tarea.ts) y ejemplos (ej. pruebas/oro/tareas.json)
+contrato: shared/esquemas/tarea.ts
+ejemplos: pruebas/oro/tareas.json
