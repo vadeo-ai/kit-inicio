@@ -1,0 +1,32 @@
+# Estándar Vadeo (D-108 P6). semgrep y gitleaks son checks obligatorios en main y develop.
+name: seguridad
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+  schedule:
+    - cron: "0 11 * * 1"   # lunes 6:00 Bogotá
+permissions:
+  contents: read
+concurrency:
+  group: seguridad-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container: semgrep/semgrep:latest   # CLI open source; sin cuenta ni token
+    steps:
+      - uses: actions/checkout@v4
+      - name: Semgrep (bloquea con hallazgos ERROR)
+        run: semgrep scan --config p/typescript --config p/javascript --config p/secrets --severity ERROR --error --metrics=off
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: gitleaks (bloquea si encuentra cualquier secreto)
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar xz gitleaks
+          ./gitleaks git --redact --exit-code 1 .

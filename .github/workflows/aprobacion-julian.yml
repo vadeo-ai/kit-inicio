@@ -1,0 +1,32 @@
+# .github/workflows/aprobacion-julian.yml — aprobación de Julián obligatoria en todo PR (D-139/D-166, OK Julián 2026-10-11 04:25).
+# Equivale a rutas-negocio de vadeo-ccc/presupuesto (#38), pero cubre TODO el repo (infra = todo es sensible).
+# Pasa si sobre el SHA del head hay: (a) review APPROVED de @julian-elsugar, o (b) registro D-139 de la App
+# vadeo-ai-revisor (comentario "Aprobado por Julián en grupo Intraía — D-139 …" que contiene el SHA).
+# Otro push invalida el registro. Corre la versión de la rama base (pull_request_target): un PR no puede
+# debilitarla. No hace checkout del código del PR. Tras el registro: re-run de este job (scripts/revisor-d139.sh).
+name: aprobacion-julian
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+jobs:
+  aprobacion-julian:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Aprobación de Julián sobre el último commit (review o registro D-139)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          head=$(gh api "repos/$REPO/pulls/$PR" --jq .head.sha)
+          ok=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq "[.[] | select(.user.login==\"julian-elsugar\" and .commit_id==\"$head\")] | last | .state // \"\"")
+          if [ "$ok" = "APPROVED" ]; then echo "Aprobado por @julian-elsugar en $head."; exit 0; fi
+          reg=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | select(.user.login==\"vadeo-ai-revisor[bot]\" and (.body | startswith(\"Aprobado por Julián en grupo Intraía — D-139\")) and (.body | contains(\"$head\")))] | last | .html_url // \"\"")
+          if [ -n "$reg" ]; then echo "Aprobado por Julián en grupo Intraía (D-139) para $head: $reg"; exit 0; fi
+          echo "::error::Falta la aprobación de Julián sobre $head (review de @julian-elsugar o registro D-139 de vadeo-ai-revisor)."; exit 1

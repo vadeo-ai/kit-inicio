@@ -1,0 +1,143 @@
+# Cadena de suministro (D-180): copia autocontenida de vadeo-ai/ci-kit/.github/workflows/cadena-suministro.yml.
+# Este repo es PÚBLICO y no puede llamar al workflow privado de ci-kit. Si ci-kit cambia, sincronizar a mano.
+# El job veredicto se llama "cadena-suministro / veredicto" para coincidir con el check obligatorio del ruleset.
+name: cadena-suministro
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 12 * * 1"   # lunes 7:00 Bogotá
+permissions:
+  contents: read
+env:
+  OSV_VERSION: "2.2.3"
+  GUARDDOG_VERSION: "3.2.0"
+  # Reglas de alta señal (malware real). Las capability-* y threat-* genéricas dan falsos positivos en next/pg/argon2.
+  GUARDDOG_REGLAS: >-
+    threat-network-dns-exfil threat-network-exfil-messenger threat-network-exfil-sysinfo threat-network-reverse-shell
+    threat-npm-dependency-confusion threat-npm-preinstall-script threat-process-cryptomining threat-process-hooks
+    threat-process-injection-dll threat-process-powershell-encoded threat-runtime-keylogging
+    threat-runtime-obfuscation-dynamic-eval threat-runtime-obfuscation-hidden-code threat-runtime-obfuscation-log-suppress
+    threat-runtime-self-propagation typosquatting deceptive_author provenance_regression
+jobs:
+  osv:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults: { run: { working-directory: "." } }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: OSV-Scanner (falla con vulnerabilidades conocidas)
+        run: |
+          set -euo pipefail
+          [ -f package-lock.json ] || { echo "::notice::sin package-lock.json en $PWD: nada que escanear"; exit 0; }
+          b=osv-scanner_linux_amd64; u=https://github.com/google/osv-scanner/releases/download/v$OSV_VERSION
+          curl -sSfL -o "$RUNNER_TEMP/$b" "$u/$b"; curl -sSfL -o "$RUNNER_TEMP/sums" "$u/osv-scanner_SHA256SUMS"
+          (cd "$RUNNER_TEMP" && grep " $b\$" sums | sha256sum -c -)
+          chmod +x "$RUNNER_TEMP/$b"
+          "$RUNNER_TEMP/$b" scan source -L package-lock.json
+  firmas:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults: { run: { working-directory: "." } }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - id: hay
+        run: '[ -f package-lock.json ] && echo si=1 >> "$GITHUB_OUTPUT" || echo "::notice::sin package-lock.json: nada que verificar"'
+      - if: steps.hay.outputs.si
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "22" }
+      - name: npm audit signatures (sin correr scripts de instalación)
+        if: steps.hay.outputs.si
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm audit signatures
+  guarddog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults: { run: { working-directory: "." } }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with: { fetch-depth: 0 }
+      - name: Paquetes a revisar
+        id: lista
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+        run: |
+          set -euo pipefail
+          [ -f package-lock.json ] || { echo "::notice::sin package-lock.json"; echo n=0 >> "$GITHUB_OUTPUT"; exit 0; }
+          base_lock=""; dir=$(git rev-parse --show-prefix)
+          if [ -n "$BASE" ]; then
+            base_lock="$RUNNER_TEMP/base-lock.json"
+            git show "$BASE:${dir}package-lock.json" > "$base_lock" 2>/dev/null || echo '{}' > "$base_lock"
+          fi
+          node - "$base_lock" > "$RUNNER_TEMP/gd-package.json" <<'JS'
+          const fs = require("fs"); const base = process.argv[2];
+          const pk = (f) => JSON.parse(fs.readFileSync(f, "utf8")).packages || {};
+          const nombre = (p, v) => v.name || p.slice(p.lastIndexOf("node_modules/") + 13);
+          const reg = (v) => !v.resolved || v.resolved.startsWith("https://registry.npmjs.org/");
+          const cab = pk("package-lock.json"); const deps = {}; const fuera = [];
+          if (base) { // PR: lo nuevo o cambiado
+            const b = pk(base); const vistos = new Set(Object.entries(b).map(([p, v]) => `${nombre(p, v)}@${v.version}`));
+            for (const [p, v] of Object.entries(cab)) {
+              if (!p.includes("node_modules/") || v.link) continue;
+              const n = nombre(p, v); if (vistos.has(`${n}@${v.version}`)) continue;
+              if (!reg(v)) fuera.push(`${n}@${v.version} (${v.resolved})`); else deps[n] = v.version;
+            }
+          } else { // push/manual: dependencias directas de la raíz y de los workspaces
+            for (const [p, v] of Object.entries(cab)) {
+              if (p.includes("node_modules/")) continue;
+              for (const n of Object.keys({ ...(v.dependencies || {}), ...(v.devDependencies || {}) })) {
+                const r = cab[`node_modules/${n}`] || cab[`${p ? p + "/" : ""}node_modules/${n}`];
+                if (r && !r.link && reg(r)) deps[n] = r.version;
+              }
+            }
+          }
+          if (fuera.length) { console.error("::error::Paquetes nuevos fuera del registro npm (revisión humana): " + fuera.join(", ")); process.exitCode = 3; }
+          process.stdout.write(JSON.stringify({ name: "gd", version: "0.0.0", dependencies: deps }));
+          JS
+          n=$(node -e 'console.log(Object.keys(require(process.argv[1]).dependencies).length)' "$RUNNER_TEMP/gd-package.json")
+          echo "Paquetes a revisar: $n"; echo "n=$n" >> "$GITHUB_OUTPUT"
+      - if: steps.lista.outputs.n != '0'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "3.12" }
+      - name: GuardDog (falla con cualquier hallazgo de las reglas de alta señal)
+        if: steps.lista.outputs.n != '0'
+        run: |
+          set -euo pipefail
+          pip install --quiet "guarddog==$GUARDDOG_VERSION"
+          reglas=(); for r in $GUARDDOG_REGLAS; do reglas+=(--rules "$r"); done
+          guarddog npm verify "$RUNNER_TEMP/gd-package.json" "${reglas[@]}" --output-format json > "$RUNNER_TEMP/gd.json"
+          python3 - "$RUNNER_TEMP/gd.json" <<'PY'
+          import json, sys
+          d = json.load(open(sys.argv[1])); malos = []
+          for x in d:
+              r = x.get("result") or {}
+              hall = {k: v for k, v in (r.get("results") or {}).items() if v}
+              if r.get("issues") or hall: malos.append(f"{x.get('dependency')}@{x.get('version')}: {sorted(hall)}")
+              for e in (r.get("errors") or {}).items(): print(f"::warning::{x.get('dependency')}: {e}")
+          print(f"GuardDog revisó {len(d)} paquetes")
+          for m in malos: print(f"::error::GuardDog {m}")
+          sys.exit(1 if malos else 0)
+          PY
+  dependencias:
+    if: github.event_name == 'pull_request' && true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with: { fail-on-severity: high }
+  veredicto:
+    if: always()
+    needs: [osv, firmas, guarddog, dependencias]
+    name: cadena-suministro / veredicto
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Todo en verde (o saltado por no aplicar)
+        env: { R: "${{ toJSON(needs) }}" }
+        run: |
+          echo "$R" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$R" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' > /dev/null
